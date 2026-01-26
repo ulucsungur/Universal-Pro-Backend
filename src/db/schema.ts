@@ -1,38 +1,37 @@
-import {
-  pgTable,
-  text,
-  timestamp,
-  bigint,
-  numeric,
-  serial,
-} from 'drizzle-orm/pg-core'; // serial BURAYA EKLENDİ
+import { pgTable, text, timestamp, bigint, pgEnum } from 'drizzle-orm/pg-core';
 
-// 1. Kategoriler
+// 1. Kullanıcı Rollerini Tanımlayalım
+export const roleEnum = pgEnum('user_role', ['admin', 'agent', 'user']);
+
+export const users = pgTable('users', {
+  id: bigint('id', { mode: 'number' })
+    .primaryKey()
+    .generatedByDefaultAsIdentity(),
+  fullName: text('full_name').notNull(),
+  email: text('email').unique().notNull(),
+  password: text('password'),
+  role: roleEnum('role').default('user').notNull(),
+  avatarUrl: text('avatar_url'),
+  githubId: text('github_id').unique(),
+  googleId: text('google_id').unique(),
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
+// Kategoriler (Supabase'deki mevcut int8 yapısıyla eşitledik)
 export const categories = pgTable('categories', {
-  id: bigint('id', { mode: 'number' }).primaryKey(),
+  id: bigint('id', { mode: 'number' }).primaryKey().generatedAlwaysAsIdentity(),
   title: text('title').notNull(),
   slug: text('slug').unique().notNull(),
   imageUrl: text('image_url'),
   createdAt: timestamp('created_at').defaultNow(),
 });
 
-// 2. İlanlar
+// İlanlar (Supabase'deki mevcut int8 yapısıyla eşitledik)
 export const listings = pgTable('listings', {
-  id: bigint('id', { mode: 'number' }).primaryKey(),
+  id: bigint('id', { mode: 'number' }).primaryKey().generatedAlwaysAsIdentity(),
   title: text('title').notNull(),
   description: text('description'),
-  price: numeric('price').notNull(),
+  price: text('price').notNull(),
   currency: text('currency').default('TRY'),
-  createdAt: timestamp('created_at').defaultNow(),
-});
-
-// 3. Kullanıcılar (Giriş Sistemi İçin)
-export const users = pgTable('users', {
-  id: serial('id').primaryKey(), // Artık hata vermeyecek
-  fullName: text('full_name').notNull(),
-  email: text('email').unique().notNull(),
-  password: text('password').notNull(),
-  role: text('role').default('user').notNull(),
-  avatarUrl: text('avatar_url'),
   createdAt: timestamp('created_at').defaultNow(),
 });
