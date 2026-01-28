@@ -5,6 +5,7 @@ import dotenv from 'dotenv';
 import { db } from './db';
 import { categories, listings } from './db/schema';
 import authRoutes from './routes/auth';
+import { eq } from 'drizzle-orm';
 
 dotenv.config();
 
@@ -35,6 +36,22 @@ app.get('/api/listings', async (req, res) => {
   try {
     const data = await db.select().from(listings);
     res.json(data);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// backend/src/index.ts - Tek bir ilanı ID ile getirir
+app.get('/api/listings/:id', async (req, res) => {
+  const { id } = req.params;
+  try {
+    const data = await db
+      .select()
+      .from(listings)
+      .where(eq(listings.id, Number(id)));
+    if (data.length === 0)
+      return res.status(404).json({ error: 'İlan bulunamadı' });
+    res.json(data[0]);
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
