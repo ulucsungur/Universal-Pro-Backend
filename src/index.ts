@@ -2,27 +2,50 @@ import express from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import dotenv from 'dotenv';
+import multer from 'multer';
+import { createClient } from '@supabase/supabase-js';
+import { eq } from 'drizzle-orm';
+
 import { db } from './db';
 import { categories, listings } from './db/schema';
 import authRoutes from './routes/auth';
-import { eq } from 'drizzle-orm';
 
 dotenv.config();
 
 const app = express();
+
+// 1. GÜVENLİK AYARLARI
 app.use(
   cors({
     origin: ['http://localhost:5173', 'http://localhost:3000'],
     credentials: true,
   }),
-); // Frontend izni
+);
 app.use(express.json());
-app.use(cookieParser()); // Çerezleri okumak için şart
+app.use(cookieParser());
 
-// Rotalar
+// 2. SUPABASE ADMIN (STORAGE İÇİN)
+const supabaseUrl =
+  process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+// Eğer değişkenler eksikse sunucu başlamadan bizi terminalde uyarsın
+if (!supabaseUrl || !supabaseServiceKey) {
+  console.error(
+    '❌ HATA: SUPABASE_URL veya SUPABASE_SERVICE_ROLE_KEY bulunamadı!',
+  );
+  console.log('Mevcut URL:', supabaseUrl);
+  process.exit(1); // Sunucuyu durdur ki hatayı görebilelim
+}
+
+const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
+// 3. DOSYA YÜKLEME AYARI
+const upload = multer({ storage: multer.memoryStorage() });
+
+// 4. ROTALAR (ROUTES)
 app.use('/api/auth', authRoutes);
 
-// 1. Tüm Kategorileri Getir
+// KATEGORİLER
 app.get('/api/categories', async (req, res) => {
   try {
     const data = await db.select().from(categories);
@@ -31,7 +54,8 @@ app.get('/api/categories', async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
-// 2. Tüm İlanları Getir
+
+// İLANLARI LİSTELE
 app.get('/api/listings', async (req, res) => {
   try {
     const data = await db.select().from(listings);
@@ -41,7 +65,7 @@ app.get('/api/listings', async (req, res) => {
   }
 });
 
-// backend/src/index.ts - Tek bir ilanı ID ile getirir
+// TEKİL İLAN DETAYI
 app.get('/api/listings/:id', async (req, res) => {
   const { id } = req.params;
   try {
@@ -57,6 +81,48 @@ app.get('/api/listings/:id', async (req, res) => {
   }
 });
 
-app.listen(5000, () => {
-  console.log('Backend Sunucusu Hazır: http://localhost:5000');
+// YENİ İLAN EKLEME (RESİMLERLE BİRLİKTE)
+app.post('/api/listings', upload.array('images', 5), async (req: any, res) => {
+  try {
+    const { title, description, price, currency } = req.body;
+    const files = req.files as Express.Multer.File[];
+    const uploadedUrls: string[] = [];
+
+    if (files) {
+      for (const file of files) {
+        const fileName = `${Date.now()}-${file.originalname}`;
+        const { data, error } = await supabaseAdmin.storage
+          .from('listings')
+          .upload(fileName, file.buffer, { contentType: file.mimetype });
+
+        if (error) throw error;
+
+        const {
+          data: { publicUrl },
+        } = supabaseAdmin.storage.from('listings').getPublicUrl(fileName);
+        uploadedUrls.push(publicUrl);
+      }
+    }
+
+    const [newListing] = await db
+      .insert(listings)
+      .values({
+        title,
+        description,
+        price: price.toString(),
+        currency: currency || 'TRY',
+        imageUrls: uploadedUrls,
+      })
+      .returning();
+
+    res.status(201).json(newListing);
+  } catch (error: any) {
+    console.error('Yükleme Hatası:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+const PORT = 5000;
+app.listen(PORT, () => {
+  console.log(`🚀 Backend Sunucusu Hazır: http://localhost:${PORT}`);
 });

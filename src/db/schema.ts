@@ -33,5 +33,6 @@ export const listings = pgTable('listings', {
   description: text('description'),
   price: text('price').notNull(),
   currency: text('currency').default('TRY'),
+  imageUrls: text('image_urls').array().default([]),
   createdAt: timestamp('created_at').defaultNow(),
 });
