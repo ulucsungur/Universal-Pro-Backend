@@ -4,11 +4,11 @@ import cookieParser from 'cookie-parser';
 import dotenv from 'dotenv';
 import multer from 'multer';
 import { createClient } from '@supabase/supabase-js';
-import { eq } from 'drizzle-orm';
-
+import { isNull, eq } from 'drizzle-orm';
 import { db } from './db';
 import { categories, listings } from './db/schema';
 import authRoutes from './routes/auth';
+import { inArray } from 'drizzle-orm';
 
 dotenv.config();
 
@@ -46,10 +46,49 @@ const upload = multer({ storage: multer.memoryStorage() });
 app.use('/api/auth', authRoutes);
 
 // KATEGORİLER
+// Bu fonksiyon bir ağaç gibi aşağı doğru tüm ID'leri toplar
+async function getAllCategoryIds(parentId: number): Promise<number[]> {
+  const subCats = await db
+    .select()
+    .from(categories)
+    .where(eq(categories.parentId, parentId));
+  let ids = [parentId];
+  for (const sub of subCats) {
+    const subIds = await getAllCategoryIds(sub.id);
+    ids = [...ids, ...subIds];
+  }
+  return ids;
+}
 app.get('/api/categories', async (req, res) => {
   try {
-    const data = await db.select().from(categories);
+    const topOnly = req.query.topOnly === 'true';
+    const data = topOnly
+      ? await db.select().from(categories).where(isNull(categories.parentId))
+      : await db.select().from(categories);
     res.json(data);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Bir kategoriye tıklandığında (Vasıta gibi) tüm alt ilanları getiren kapı
+app.get('/api/category/:slug/listings', async (req, res) => {
+  const { slug } = req.params;
+  try {
+    const [category] = await db
+      .select()
+      .from(categories)
+      .where(eq(categories.slug, slug));
+    if (!category)
+      return res.status(404).json({ error: 'Kategori bulunamadı' });
+
+    const allIds = await getAllCategoryIds(category.id); // 🚀 Dedektif çalıştı!
+    const data = await db
+      .select()
+      .from(listings)
+      .where(inArray(listings.categoryId, allIds));
+
+    res.json({ category, listings: data });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -118,6 +157,43 @@ app.post('/api/listings', upload.array('images', 5), async (req: any, res) => {
     res.status(201).json(newListing);
   } catch (error: any) {
     console.error('Yükleme Hatası:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 1. YENİ KATEGORİ EKLEME (Resimli & Çok Dilli)
+app.post('/api/categories', upload.single('image'), async (req: any, res) => {
+  try {
+    const { titleTr, titleEn, slug, parentId } = req.body;
+    let imageUrl = '';
+
+    // Eğer resim seçildiyse Supabase Storage'a yükle
+    if (req.file) {
+      const fileName = `cat-${Date.now()}-${req.file.originalname}`;
+      const { data, error: uploadError } = await supabaseAdmin.storage
+        .from('listings') // Kategoriler için de aynı bucket'ı kullanabiliriz
+        .upload(fileName, req.file.buffer, { contentType: req.file.mimetype });
+
+      if (uploadError) throw uploadError;
+      const {
+        data: { publicUrl },
+      } = supabaseAdmin.storage.from('listings').getPublicUrl(fileName);
+      imageUrl = publicUrl;
+    }
+
+    const [newCategory] = await db
+      .insert(categories)
+      .values({
+        titleTr,
+        titleEn,
+        slug,
+        imageUrl,
+        parentId: parentId ? Number(parentId) : null,
+      })
+      .returning();
+
+    res.status(201).json(newCategory);
+  } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
 });
