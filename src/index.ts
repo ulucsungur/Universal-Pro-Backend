@@ -9,6 +9,7 @@ import { db } from './db';
 import { categories, listings } from './db/schema';
 import authRoutes from './routes/auth';
 import { inArray } from 'drizzle-orm';
+import { authenticate } from './middleware/auth';
 
 dotenv.config();
 
@@ -75,21 +76,32 @@ app.get('/api/categories', async (req, res) => {
 app.get('/api/category/:slug/listings', async (req, res) => {
   const { slug } = req.params;
   try {
-    const [category] = await db
-      .select()
-      .from(categories)
-      .where(eq(categories.slug, slug));
+    // 1. Önce kategoriyi bul
+    const category = await db.query.categories.findFirst({
+      where: eq(categories.slug, slug),
+    });
+
     if (!category)
       return res.status(404).json({ error: 'Kategori bulunamadı' });
 
-    const allIds = await getAllCategoryIds(category.id); // 🚀 Dedektif çalıştı!
-    const data = await db
-      .select()
-      .from(listings)
-      .where(inArray(listings.categoryId, allIds));
+    // 2. Alt kategori ID'lerini topla (Recursive fonksiyonunuz çalışıyor olmalı)
+    const allIds = await getAllCategoryIds(category.id);
 
-    res.json({ category, listings: data });
+    // 3. 🚀 KESİN ÇÖZÜM: İlişkisel sorgu ile ilanları ve satıcıları çek
+    // 'sellerId' NULL olsa bile bu sorgu ilanları getirecektir.
+    const data = await db.query.listings.findMany({
+      where: inArray(listings.categoryId, allIds),
+      with: {
+        seller: true, // Satıcı varsa getirir, yoksa 'null' döner
+      },
+    });
+
+    res.json({
+      category,
+      listings: data,
+    });
   } catch (error: any) {
+    console.error('Kategori API Hatası:', error.message);
     res.status(500).json({ error: error.message });
   }
 });
@@ -108,58 +120,88 @@ app.get('/api/listings', async (req, res) => {
 app.get('/api/listings/:id', async (req, res) => {
   const { id } = req.params;
   try {
-    const data = await db
-      .select()
-      .from(listings)
-      .where(eq(listings.id, Number(id)));
-    if (data.length === 0)
-      return res.status(404).json({ error: 'İlan bulunamadı' });
-    res.json(data[0]);
+    // 🚀 JOIN İşlemi: İlanı çek, yanına satıcıyı (users) ve kategoriyi de ekle
+    const data = await db.query.listings.findFirst({
+      where: eq(listings.id, Number(id)),
+      with: {
+        seller: true, // listings.sellerId -> users.id eşleşmesi
+        category: true, // listings.categoryId -> categories.id eşleşmesi
+      },
+    });
+
+    if (!data) return res.status(404).json({ error: 'İlan bulunamadı' });
+    res.json(data);
   } catch (error: any) {
+    console.error('Detay API Hatası:', error.message);
     res.status(500).json({ error: error.message });
   }
 });
 
 // YENİ İLAN EKLEME (RESİMLERLE BİRLİKTE)
-app.post('/api/listings', upload.array('images', 5), async (req: any, res) => {
-  try {
-    const { title, description, price, currency } = req.body;
-    const files = req.files as Express.Multer.File[];
-    const uploadedUrls: string[] = [];
+app.post(
+  '/api/listings',
+  authenticate,
+  upload.array('images', 5),
+  async (req: any, res) => {
+    try {
+      const {
+        titleTr,
+        titleEn,
+        descriptionTr,
+        descriptionEn,
+        price,
+        currency,
+        categoryId,
+        specs,
+      } = req.body;
 
-    if (files) {
-      for (const file of files) {
-        const fileName = `${Date.now()}-${file.originalname}`;
-        const { data, error } = await supabaseAdmin.storage
-          .from('listings')
-          .upload(fileName, file.buffer, { contentType: file.mimetype });
+      // 🚀 KRİTİK: Satıcı ID'sini artık güvenli olan 'req.user' içinden alıyoruz
+      const sellerIdFromAuth = req.user.id;
 
-        if (error) throw error;
+      const files = req.files as Express.Multer.File[];
+      const uploadedUrls: string[] = [];
 
-        const {
-          data: { publicUrl },
-        } = supabaseAdmin.storage.from('listings').getPublicUrl(fileName);
-        uploadedUrls.push(publicUrl);
+      // A. Resim yükleme motoru (Supabase Storage)
+      if (files) {
+        for (const file of files) {
+          const fileName = `list-${Date.now()}-${file.originalname.replace(/\s+/g, '-')}`;
+          const { error } = await supabaseAdmin.storage
+            .from('listings')
+            .upload(fileName, file.buffer);
+          if (error) throw error;
+          const {
+            data: { publicUrl },
+          } = supabaseAdmin.storage.from('listings').getPublicUrl(fileName);
+          uploadedUrls.push(publicUrl);
+        }
       }
+
+      // B. Veritabanına mühürleme
+      const [newListing] = await db
+        .insert(listings)
+        .values({
+          title: titleTr || titleEn,
+          titleTr,
+          titleEn,
+          description: descriptionTr || descriptionEn,
+          descriptionTr,
+          descriptionEn,
+          price: price.toString(),
+          currency: currency || 'TRY',
+          imageUrls: uploadedUrls,
+          categoryId: categoryId ? Number(categoryId) : null,
+          specs: specs ? JSON.parse(specs) : {},
+          sellerId: sellerIdFromAuth, // 🚀 SATICI ARTIK ASLA BOŞ KALMAYACAK!
+        })
+        .returning();
+
+      res.status(201).json(newListing);
+    } catch (error: any) {
+      console.error('Kayıt Hatası:', error.message);
+      res.status(500).json({ error: error.message });
     }
-
-    const [newListing] = await db
-      .insert(listings)
-      .values({
-        title,
-        description,
-        price: price.toString(),
-        currency: currency || 'TRY',
-        imageUrls: uploadedUrls,
-      })
-      .returning();
-
-    res.status(201).json(newListing);
-  } catch (error: any) {
-    console.error('Yükleme Hatası:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
+  },
+);
 
 // 1. YENİ KATEGORİ EKLEME (Resimli & Çok Dilli)
 app.post('/api/categories', upload.single('image'), async (req: any, res) => {
