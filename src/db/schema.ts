@@ -87,3 +87,17 @@ export const listingsRelations = relations(listings, ({ one }) => ({
     references: [categories.id],
   }),
 }));
+
+// backend/src/db/schema.ts en altına ekleyin:
+
+export const banners = pgTable('banners', {
+  id: integer('id').primaryKey().generatedAlwaysAsIdentity(),
+  titleTr: text('title_tr').notNull(),
+  titleEn: text('title_en').notNull(),
+  subtitleTr: text('subtitle_tr'),
+  subtitleEn: text('subtitle_en'),
+  imageUrl: text('image_url').notNull(),
+  link: text('link').default('/'), // Resme tıklayınca nereye gitsin?
+  order: integer('order').default(0), // Sıralama için
+  createdAt: timestamp('created_at').defaultNow(),
+});

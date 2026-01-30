@@ -6,7 +6,7 @@ import multer from 'multer';
 import { createClient } from '@supabase/supabase-js';
 import { isNull, eq } from 'drizzle-orm';
 import { db } from './db';
-import { categories, listings } from './db/schema';
+import { categories, listings, banners } from './db/schema';
 import authRoutes from './routes/auth';
 import { inArray } from 'drizzle-orm';
 import { authenticate } from './middleware/auth';
@@ -237,6 +237,64 @@ app.post('/api/categories', upload.single('image'), async (req: any, res) => {
     res.status(201).json(newCategory);
   } catch (error: any) {
     res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/banners', async (req, res) => {
+  try {
+    const data = await db.query.banners.findMany({
+      orderBy: (banners, { asc }) => [asc(banners.order)],
+    });
+    res.json(data);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 🚀 BANNER EKLEME (Garantili ve Hatasız Versiyon)
+app.post('/api/banners', upload.single('image'), async (req: any, res: any) => {
+  try {
+    const { titleTr, titleEn, subtitleTr, subtitleEn, link, order } = req.body;
+    let imageUrl = '';
+
+    if (req.file) {
+      const fileName = `banner-${Date.now()}-${req.file.originalname.replace(/\s+/g, '-')}`;
+
+      const { error: uploadError } = await supabaseAdmin.storage
+        .from('banners')
+        .upload(fileName, req.file.buffer, {
+          contentType: req.file.mimetype,
+          upsert: true,
+        });
+
+      if (uploadError) throw uploadError;
+
+      const {
+        data: { publicUrl },
+      } = supabaseAdmin.storage.from('banners').getPublicUrl(fileName);
+
+      imageUrl = publicUrl;
+    }
+
+    // Banner Resim  Yükleme API'si
+    const [newBanner] = await db
+      .insert(banners)
+      .values({
+        titleTr,
+        titleEn,
+        subtitleTr: subtitleTr || '',
+        subtitleEn: subtitleEn || '',
+        imageUrl,
+        link: link || '/',
+        order: order ? Number(order) : 0,
+      })
+      .returning();
+
+    res.status(201).json(newBanner);
+  } catch (error: unknown) {
+    const msg = error instanceof Error ? error.message : 'Bilinmeyen hata';
+    console.error('Banner Hatası:', msg);
+    res.status(500).json({ error: msg });
   }
 });
 
