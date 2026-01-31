@@ -191,7 +191,11 @@ app.post(
           imageUrls: uploadedUrls,
           categoryId: categoryId ? Number(categoryId) : null,
           specs: specs ? JSON.parse(specs) : {},
-          sellerId: sellerIdFromAuth, // 🚀 SATICI ARTIK ASLA BOŞ KALMAYACAK!
+          sellerId: sellerIdFromAuth,
+
+          type: req.body.type || 'sale',
+          isDaily: req.body.isDaily || 'false',
+          stock: req.body.stock ? Number(req.body.stock) : 1,
         })
         .returning();
 

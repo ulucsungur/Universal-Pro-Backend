@@ -5,6 +5,7 @@ import {
   bigint,
   numeric,
   integer,
+  serial,
   pgEnum,
   jsonb,
 } from 'drizzle-orm/pg-core';
@@ -12,6 +13,7 @@ import { relations } from 'drizzle-orm';
 
 // 1. Rol Tanımları
 export const roleEnum = pgEnum('user_role', ['admin', 'agent', 'user']);
+export const listingTypeEnum = pgEnum('listing_type', ['sale', 'rent']);
 
 // 2. USERS (Kullanıcılar)
 export const users = pgTable('users', {
@@ -46,11 +48,11 @@ export const listings = pgTable('listings', {
     .primaryKey()
     .generatedByDefaultAsIdentity(),
   title: text('title').notNull(), // Varsayılan başlık
-  titleTr: text('title_tr'), // 🚀 Yeni
-  titleEn: text('title_en'), // 🚀 Yeni
+  titleTr: text('title_tr'),
+  titleEn: text('title_en'),
   description: text('description'),
-  descriptionTr: text('description_tr'), // 🚀 Yeni
-  descriptionEn: text('description_en'), // 🚀 Yeni
+  descriptionTr: text('description_tr'),
+  descriptionEn: text('description_en'),
   price: numeric('price').notNull(),
   currency: text('currency').default('TRY'),
   imageUrls: text('image_urls').array().default([]),
@@ -59,8 +61,40 @@ export const listings = pgTable('listings', {
     () => categories.id,
   ),
   sellerId: integer('seller_id').references(() => users.id),
+
+  // 🚀 TİCARET KOLONLARI
+  type: listingTypeEnum('type').default('sale').notNull(), // Satılık mı Kiralık mı?
+  isDaily: text('is_daily').default('false'), // Günlük kiralama aktif mi? (Airbnb modu)
+  stock: integer('stock').default(1), // Amazon modu için stok takibi
+
   createdAt: timestamp('created_at').defaultNow(),
 });
+
+// 🚀 2. REZERVASYONLAR TABLOSU (Airbnb Modu İçin)
+export const bookings = pgTable('bookings', {
+  id: serial('id').primaryKey(),
+  listingId: bigint('listing_id', { mode: 'number' }).references(
+    () => listings.id,
+  ),
+  customerId: integer('customer_id').references(() => users.id),
+  startDate: timestamp('start_date').notNull(),
+  endDate: timestamp('end_date').notNull(),
+  totalPrice: numeric('total_price').notNull(),
+  status: text('status').default('confirmed'), // confirmed, cancelled
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
+// 3. İLİŞKİLERİ GÜNCELLEYELİM
+export const bookingsRelations = relations(bookings, ({ one }) => ({
+  listing: one(listings, {
+    fields: [bookings.listingId],
+    references: [listings.id],
+  }),
+  customer: one(users, {
+    fields: [bookings.customerId],
+    references: [users.id],
+  }),
+}));
 
 // --- İLİŞKİLER (RELATIONS) ---
 export const usersRelations = relations(users, ({ many }) => ({
