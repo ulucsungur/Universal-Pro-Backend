@@ -10,6 +10,8 @@ import { categories, listings, banners } from './db/schema';
 import authRoutes from './routes/auth';
 import { inArray } from 'drizzle-orm';
 import { authenticate } from './middleware/auth';
+import { and, gte, lte } from 'drizzle-orm';
+import { bookings } from './db/schema';
 
 dotenv.config();
 
@@ -299,6 +301,29 @@ app.post('/api/banners', upload.single('image'), async (req: any, res: any) => {
     const msg = error instanceof Error ? error.message : 'Bilinmeyen hata';
     console.error('Banner Hatası:', msg);
     res.status(500).json({ error: msg });
+  }
+});
+
+// 🚀 BİR İLANIN DOLU TARİHLERİNİ GETİR
+app.get('/api/listings/:id/booked-dates', async (req, res) => {
+  const { id } = req.params;
+  try {
+    const data = await db
+      .select({
+        startDate: bookings.startDate,
+        endDate: bookings.endDate,
+      })
+      .from(bookings)
+      .where(
+        and(
+          eq(bookings.listingId, Number(id)),
+          eq(bookings.status, 'confirmed'),
+        ),
+      );
+
+    res.json(data);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
   }
 });
 
