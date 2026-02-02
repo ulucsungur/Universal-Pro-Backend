@@ -13,6 +13,7 @@ import { authenticate } from './middleware/auth';
 import { and, gte, lte } from 'drizzle-orm';
 import { bookings } from './db/schema';
 import { orders } from './db/schema';
+import { addresses } from './db/schema';
 
 dotenv.config();
 
@@ -199,6 +200,7 @@ app.post(
           type: req.body.type || 'sale',
           isDaily: req.body.isDaily || 'false',
           stock: req.body.stock ? Number(req.body.stock) : 1,
+          isShippable: req.body.isShippable || 'true',
         })
         .returning();
 
@@ -372,6 +374,40 @@ app.get('/api/orders/my-orders', authenticate, async (req: any, res) => {
       orderBy: (orders, { desc }) => [desc(orders.createdAt)],
     });
     res.json(data);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+// 1. KULLANICININ ADRESLERİNİ GETİR
+app.get('/api/addresses', authenticate, async (req: any, res) => {
+  try {
+    const data = await db
+      .select()
+      .from(addresses)
+      .where(eq(addresses.userId, req.user.id));
+    res.json(data);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 2. YENİ ADRES EKLE
+app.post('/api/addresses', authenticate, async (req: any, res) => {
+  try {
+    const { title, fullName, phone, city, district, addressDetail } = req.body;
+    const [newAddress] = await db
+      .insert(addresses)
+      .values({
+        userId: req.user.id,
+        title,
+        fullName,
+        phone,
+        city,
+        district,
+        addressDetail,
+      })
+      .returning();
+    res.status(201).json(newAddress);
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }

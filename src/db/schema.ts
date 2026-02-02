@@ -61,6 +61,7 @@ export const listings = pgTable('listings', {
     () => categories.id,
   ),
   sellerId: integer('seller_id').references(() => users.id),
+  isShippable: text('is_shippable').default('true'), // 🚀 Araba/Ev için 'false
 
   // 🚀 TİCARET KOLONLARI
   type: listingTypeEnum('type').default('sale').notNull(), // Satılık mı Kiralık mı?
@@ -158,7 +159,9 @@ export const orders = pgTable('orders', {
     .notNull(), // Satan
   quantity: integer('quantity').default(1).notNull(),
   totalPrice: numeric('total_price').notNull(),
-  status: orderStatusEnum('status').default('paid').notNull(), // Simülasyon olduğu için direkt 'paid' başlıyoruz
+  status: orderStatusEnum('status').default('paid').notNull(), // Simülasyon olduğu için direkt 'paid' başlıyoruz.
+  addressId: integer('address_id').references(() => addresses.id),
+  shippingStatus: text('shipping_status').default('preparing'), // preparing, shipped, delivered
   createdAt: timestamp('created_at').defaultNow(),
 });
 
@@ -171,3 +174,19 @@ export const ordersRelations = relations(orders, ({ one }) => ({
   buyer: one(users, { fields: [orders.buyerId], references: [users.id] }),
   seller: one(users, { fields: [orders.sellerId], references: [users.id] }),
 }));
+
+// 🚀 1. ADRESLER TABLOSU
+export const addresses = pgTable('addresses', {
+  id: serial('id').primaryKey(),
+  userId: integer('user_id')
+    .references(() => users.id)
+    .notNull(),
+  title: text('title').notNull(), // Örn: Evim, İş Yerim
+  fullName: text('full_name').notNull(),
+  phone: text('phone').notNull(),
+  city: text('city').notNull(),
+  district: text('district').notNull(),
+  postCode: text('post_code'),
+  addressDetail: text('address_detail').notNull(),
+  createdAt: timestamp('created_at').defaultNow(),
+});
