@@ -12,6 +12,7 @@ import { inArray } from 'drizzle-orm';
 import { authenticate } from './middleware/auth';
 import { and, gte, lte } from 'drizzle-orm';
 import { bookings } from './db/schema';
+import { orders } from './db/schema';
 
 dotenv.config();
 
@@ -321,6 +322,55 @@ app.get('/api/listings/:id/booked-dates', async (req, res) => {
         ),
       );
 
+    res.json(data);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 🚀 SATIN ALMA İŞLEMİ (Amazon Modu)
+app.post('/api/orders', authenticate, async (req: any, res) => {
+  try {
+    const { listingId, quantity } = req.body;
+    const buyerId = req.user.id;
+
+    // 1. İlan bilgilerini al (Fiyat ve Satıcıyı bulmak için)
+    const listing = await db.query.listings.findFirst({
+      where: eq(listings.id, Number(listingId)),
+    });
+
+    if (!listing) return res.status(404).json({ error: 'İlan bulunamadı' });
+
+    // 2. Siparişi oluştur
+    const [newOrder] = await db
+      .insert(orders)
+      .values({
+        listingId: Number(listingId),
+        buyerId: buyerId,
+        sellerId: listing.sellerId as number,
+        quantity: quantity || 1,
+        totalPrice: (Number(listing.price) * (quantity || 1)).toString(),
+        status: 'paid', // Simülasyon gereği ödeme yapıldı kabul ediyoruz
+      })
+      .returning();
+
+    res.status(201).json(newOrder);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 🚀 SİPARİŞLERİM LİSTESİ (Alıcı için)
+app.get('/api/orders/my-orders', authenticate, async (req: any, res) => {
+  try {
+    const data = await db.query.orders.findMany({
+      where: eq(orders.buyerId, req.user.id),
+      with: {
+        listing: true, // Ürün bilgisini de getir
+        seller: true, // Satıcı bilgisini de getir
+      },
+      orderBy: (orders, { desc }) => [desc(orders.createdAt)],
+    });
     res.json(data);
   } catch (error: any) {
     res.status(500).json({ error: error.message });

@@ -135,3 +135,39 @@ export const banners = pgTable('banners', {
   order: integer('order').default(0), // Sıralama için
   createdAt: timestamp('created_at').defaultNow(),
 });
+
+export const orderStatusEnum = pgEnum('order_status', [
+  'pending',
+  'paid',
+  'shipped',
+  'delivered',
+  'cancelled',
+]);
+
+// 🚀 2. SİPARİŞLER TABLOSU
+export const orders = pgTable('orders', {
+  id: serial('id').primaryKey(),
+  listingId: bigint('listing_id', { mode: 'number' })
+    .references(() => listings.id)
+    .notNull(),
+  buyerId: integer('buyer_id')
+    .references(() => users.id)
+    .notNull(), // Satın alan
+  sellerId: integer('seller_id')
+    .references(() => users.id)
+    .notNull(), // Satan
+  quantity: integer('quantity').default(1).notNull(),
+  totalPrice: numeric('total_price').notNull(),
+  status: orderStatusEnum('status').default('paid').notNull(), // Simülasyon olduğu için direkt 'paid' başlıyoruz
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
+// 🚀 3. İLİŞKİLER
+export const ordersRelations = relations(orders, ({ one }) => ({
+  listing: one(listings, {
+    fields: [orders.listingId],
+    references: [listings.id],
+  }),
+  buyer: one(users, { fields: [orders.buyerId], references: [users.id] }),
+  seller: one(users, { fields: [orders.sellerId], references: [users.id] }),
+}));
