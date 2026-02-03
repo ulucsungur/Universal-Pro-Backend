@@ -173,6 +173,10 @@ export const ordersRelations = relations(orders, ({ one }) => ({
   }),
   buyer: one(users, { fields: [orders.buyerId], references: [users.id] }),
   seller: one(users, { fields: [orders.sellerId], references: [users.id] }),
+  address: one(addresses, {
+    fields: [orders.addressId],
+    references: [addresses.id],
+  }),
 }));
 
 // 🚀 1. ADRESLER TABLOSU

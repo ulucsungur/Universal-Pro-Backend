@@ -413,6 +413,55 @@ app.post('/api/addresses', authenticate, async (req: any, res) => {
   }
 });
 
+// 1. SATICIYA GELEN SİPARİŞLERİ GETİR (Sales)
+app.get('/api/orders/my-sales', authenticate, async (req: any, res) => {
+  try {
+    const data = await db.query.orders.findMany({
+      where: eq(orders.sellerId, req.user.id),
+      with: {
+        buyer: true,
+        address: true, // 🚀 Sipariş adresini çek
+        listing: {
+          with: {
+            category: true, // 🚀 İlanın içindeki kategoriyi de çek (Nested)
+          },
+        },
+      },
+      orderBy: (orders, { desc }) => [desc(orders.createdAt)],
+    });
+    res.json(data);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 2. SİPARİŞ DURUMUNU GÜNCELLE (Kargola / Teslim Et)
+app.patch('/api/orders/:id/status', authenticate, async (req: any, res) => {
+  const { id } = req.params;
+  const { status } = req.body; // 'shipped' veya 'delivered' gelecek
+
+  try {
+    const [updatedOrder] = await db
+      .update(orders)
+      .set({ shippingStatus: status })
+      .where(
+        and(
+          eq(orders.id, Number(id)),
+          eq(orders.sellerId, req.user.id), // 🚀 Sadece satıcı güncelleyebilir
+        ),
+      )
+      .returning();
+
+    if (!updatedOrder)
+      return res
+        .status(404)
+        .json({ error: 'Sipariş bulunamadı veya yetkiniz yok.' });
+    res.json(updatedOrder);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 const PORT = 5000;
 app.listen(PORT, () => {
   console.log(`🚀 Backend Sunucusu Hazır: http://localhost:${PORT}`);
