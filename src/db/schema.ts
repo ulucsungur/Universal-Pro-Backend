@@ -194,3 +194,38 @@ export const addresses = pgTable('addresses', {
   addressDetail: text('address_detail').notNull(),
   createdAt: timestamp('created_at').defaultNow(),
 });
+
+// 🚀 1. MESAJLAR TABLOSU
+export const messages = pgTable('messages', {
+  id: serial('id').primaryKey(),
+  senderId: integer('sender_id')
+    .references(() => users.id)
+    .notNull(),
+  receiverId: integer('receiver_id')
+    .references(() => users.id)
+    .notNull(),
+  listingId: bigint('listing_id', { mode: 'number' })
+    .references(() => listings.id)
+    .notNull(),
+  content: text('content').notNull(),
+  isRead: text('is_read').default('false').notNull(), // Okundu bilgisi
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
+// 🚀 2. MESAJ İLİŞKİLERİ
+export const messagesRelations = relations(messages, ({ one }) => ({
+  sender: one(users, {
+    fields: [messages.senderId],
+    references: [users.id],
+    relationName: 'sent_messages',
+  }),
+  receiver: one(users, {
+    fields: [messages.receiverId],
+    references: [users.id],
+    relationName: 'received_messages',
+  }),
+  listing: one(listings, {
+    fields: [messages.listingId],
+    references: [listings.id],
+  }),
+}));

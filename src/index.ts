@@ -14,6 +14,7 @@ import { and, gte, lte } from 'drizzle-orm';
 import { bookings } from './db/schema';
 import { orders } from './db/schema';
 import { addresses } from './db/schema';
+import { messages } from './db/schema';
 
 dotenv.config();
 
@@ -457,6 +458,101 @@ app.patch('/api/orders/:id/status', authenticate, async (req: any, res) => {
         .status(404)
         .json({ error: 'Sipariş bulunamadı veya yetkiniz yok.' });
     res.json(updatedOrder);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 1. MESAJ GÖNDER
+app.post('/api/messages', authenticate, async (req: any, res) => {
+  try {
+    const { listingId, receiverId, content } = req.body;
+    const senderId = req.user.id;
+
+    // 🚀 GÜVENLİK KİLİDİ: Kendine mesaj gönderimini engelle
+    if (senderId === Number(receiverId)) {
+      return res
+        .status(400)
+        .json({ error: 'Kendi ilanınıza mesaj gönderemezsiniz.' });
+    }
+
+    const [newMessage] = await db
+      .insert(messages)
+      .values({
+        senderId,
+        receiverId: Number(receiverId),
+        listingId: Number(listingId),
+        content,
+      })
+      .returning();
+    res.status(201).json(newMessage);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 2. GELEN KUTUSUNU LİSTELE
+app.get('/api/messages/inbox', authenticate, async (req: any, res) => {
+  try {
+    const data = await db.query.messages.findMany({
+      where: eq(messages.receiverId, req.user.id),
+      with: {
+        sender: true,
+        listing: true,
+      },
+      orderBy: (messages, { desc }) => [desc(messages.createdAt)],
+    });
+    res.json(data);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 2. GİDEN KUTUSUNU LİSTELE (Sent Messages)
+app.get('/api/messages/sent', authenticate, async (req: any, res) => {
+  try {
+    const data = await db.query.messages.findMany({
+      where: eq(messages.senderId, req.user.id),
+      with: {
+        receiver: true, // 🚀 Kime gönderdim?
+        listing: true,
+      },
+      orderBy: (messages, { desc }) => [desc(messages.createdAt)],
+    });
+    res.json(data);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 3. OKUNMAMIŞ MESAJ SAYISI (Bildirim Rozeti İçin)
+app.get('/api/messages/unread-count', authenticate, async (req: any, res) => {
+  try {
+    const data = await db
+      .select()
+      .from(messages)
+      .where(
+        and(eq(messages.receiverId, req.user.id), eq(messages.isRead, 'false')),
+      );
+    res.json({ count: data.length });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+// 🚀 MESAJI OKUNDU OLARAK İŞARETLE
+app.patch('/api/messages/:id/read', authenticate, async (req: any, res) => {
+  const { id } = req.params;
+  try {
+    await db
+      .update(messages)
+      .set({ isRead: 'true' })
+      .where(
+        and(
+          eq(messages.id, Number(id)),
+          eq(messages.receiverId, req.user.id), // 🚀 Sadece alıcı okundu yapabilir
+        ),
+      );
+    res.json({ success: true });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
