@@ -68,6 +68,15 @@ export const listings = pgTable('listings', {
   isDaily: text('is_daily').default('false'), // Günlük kiralama aktif mi? (Airbnb modu)
   stock: integer('stock').default(1), // Amazon modu için stok takibi
 
+  // 🚀 KONUM BİLGİLERİ
+  latitude: numeric('latitude'), // Enlem (Örn: 41.0082)
+  longitude: numeric('longitude'), // Boylam (Örn: 28.9784)
+  country: text('country').default('Türkiye'),
+  city: text('city'),
+  district: text('district'),
+  postCode: text('post_code'),
+  addressText: text('address_text'), // Şehir/İlçe/Mahalle metni
+
   createdAt: timestamp('created_at').defaultNow(),
 });
 

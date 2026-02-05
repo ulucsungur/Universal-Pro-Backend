@@ -5,5 +5,7 @@ import * as dotenv from 'dotenv';
 
 dotenv.config();
 
-const client = postgres(process.env.DATABASE_URL!);
+const client = postgres(process.env.DATABASE_URL!, {
+  ssl: { rejectUnauthorized: false },
+});
 export const db = drizzle(client, { schema });

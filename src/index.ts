@@ -15,6 +15,7 @@ import { bookings } from './db/schema';
 import { orders } from './db/schema';
 import { addresses } from './db/schema';
 import { messages } from './db/schema';
+import axios from 'axios';
 
 dotenv.config();
 
@@ -142,12 +143,41 @@ app.get('/api/listings/:id', async (req, res) => {
   }
 });
 
+// 🚀 1. GEOCONDING PROXY (CORS & 403 BYPASS)
+app.get('/api/geocoding', async (req, res) => {
+  const { q } = req.query;
+  if (!q)
+    return res.status(400).json({ error: 'Sorgu parametresi (q) gerekli.' });
+
+  try {
+    const response = await axios.get(
+      `https://nominatim.openstreetmap.org/search`,
+      {
+        params: {
+          q: q,
+          format: 'json',
+          limit: 1,
+          addressdetails: 1,
+        },
+        headers: {
+          // 🚀 Nominatim bu başlığı görmezse 403 verir. Biz burada uçağın kimliğini bildiriyoruz.
+          'User-Agent': 'UniversalMarketPro/1.0 (iletisim@unimarketpro.com)',
+        },
+      },
+    );
+    res.json(response.data);
+  } catch (error: any) {
+    console.error('Geocoding Hatası:', error.message);
+    res.status(500).json({ error: 'Konum verisi sunucudan alınamadı.' });
+  }
+});
+
 // YENİ İLAN EKLEME (RESİMLERLE BİRLİKTE)
 app.post(
   '/api/listings',
   authenticate,
   upload.array('images', 5),
-  async (req: any, res) => {
+  async (req: any, res: any) => {
     try {
       const {
         titleTr,
@@ -158,30 +188,47 @@ app.post(
         currency,
         categoryId,
         specs,
+        latitude,
+        longitude,
+        addressText,
       } = req.body;
 
-      // 🚀 KRİTİK: Satıcı ID'sini artık güvenli olan 'req.user' içinden alıyoruz
       const sellerIdFromAuth = req.user.id;
-
       const files = req.files as Express.Multer.File[];
       const uploadedUrls: string[] = [];
 
-      // A. Resim yükleme motoru (Supabase Storage)
-      if (files) {
+      // A. Resimleri Supabase Storage'a Yükle
+      if (files && files.length > 0) {
         for (const file of files) {
-          const fileName = `list-${Date.now()}-${file.originalname.replace(/\s+/g, '-')}`;
+          // Dosya isminden Türkçe karakterleri ve boşlukları temizle
+          const fileName = `list-${Date.now()}-${Math.round(Math.random() * 1e9)}`;
           const { error } = await supabaseAdmin.storage
             .from('listings')
-            .upload(fileName, file.buffer);
+            .upload(fileName, file.buffer, {
+              contentType: file.mimetype,
+              upsert: false,
+            });
+
           if (error) throw error;
+
           const {
             data: { publicUrl },
           } = supabaseAdmin.storage.from('listings').getPublicUrl(fileName);
+
           uploadedUrls.push(publicUrl);
         }
       }
 
-      // B. Veritabanına mühürleme
+      // B. Specs JSON Güvenliği
+      let parsedSpecs = {};
+      try {
+        parsedSpecs =
+          typeof specs === 'string' ? JSON.parse(specs) : specs || {};
+      } catch (e) {
+        console.warn('Specs JSON parse hatası:', e);
+      }
+
+      // C. Veritabanı Mühürleme
       const [newListing] = await db
         .insert(listings)
         .values({
@@ -191,24 +238,27 @@ app.post(
           description: descriptionTr || descriptionEn,
           descriptionTr,
           descriptionEn,
-          price: price.toString(),
+          price: price ? price.toString() : '0',
           currency: currency || 'TRY',
           imageUrls: uploadedUrls,
           categoryId: categoryId ? Number(categoryId) : null,
-          specs: specs ? JSON.parse(specs) : {},
+          specs: parsedSpecs,
           sellerId: sellerIdFromAuth,
-
           type: req.body.type || 'sale',
-          isDaily: req.body.isDaily || 'false',
+          isDaily: req.body.isDaily === 'true' ? 'true' : 'false',
           stock: req.body.stock ? Number(req.body.stock) : 1,
-          isShippable: req.body.isShippable || 'true',
+          isShippable: req.body.isShippable === 'false' ? 'false' : 'true',
+          // 🚀 Koordinatları güvenli bir şekilde Number'a çeviriyoruz
+          latitude: latitude ? latitude.toString() : null,
+          longitude: longitude ? longitude.toString() : null,
+          addressText: addressText || null,
         })
         .returning();
 
       res.status(201).json(newListing);
     } catch (error: any) {
-      console.error('Kayıt Hatası:', error.message);
-      res.status(500).json({ error: error.message });
+      console.error('Kayıt Hatası:', error);
+      res.status(500).json({ error: 'İlan kaydedilirken bir hata oluştu.' });
     }
   },
 );
@@ -464,13 +514,22 @@ app.patch('/api/orders/:id/status', authenticate, async (req: any, res) => {
 });
 
 // 1. MESAJ GÖNDER
-app.post('/api/messages', authenticate, async (req: any, res) => {
+app.post('/api/messages', authenticate, async (req: any, res: any) => {
   try {
     const { listingId, receiverId, content } = req.body;
     const senderId = req.user.id;
 
-    // 🚀 GÜVENLİK KİLİDİ: Kendine mesaj gönderimini engelle
-    if (senderId === Number(receiverId)) {
+    // 🚀 TEŞHİS LOGU: Terminale bakın
+    console.log(
+      `📩 Mesaj İsteği -> Gönderen: ${senderId}, Alıcı: ${receiverId}`,
+    );
+
+    if (!content || content.trim() === '') {
+      return res.status(400).json({ error: 'Mesaj içeriği boş olamaz.' });
+    }
+
+    // 🚀 GÜVENLİK KONTROLÜ: Alıcı ile Gönderen aynı mı?
+    if (Number(senderId) === Number(receiverId)) {
       return res
         .status(400)
         .json({ error: 'Kendi ilanınıza mesaj gönderemezsiniz.' });
@@ -485,9 +544,11 @@ app.post('/api/messages', authenticate, async (req: any, res) => {
         content,
       })
       .returning();
+
     res.status(201).json(newMessage);
   } catch (error: any) {
-    res.status(500).json({ error: error.message });
+    console.error('❌ Mesaj Hatası:', error.message);
+    res.status(500).json({ error: 'Sunucu hatası oluştu.' });
   }
 });
 
@@ -558,6 +619,43 @@ app.patch('/api/messages/:id/read', authenticate, async (req: any, res) => {
   }
 });
 
+app.post('/api/bookings', authenticate, async (req: any, res: any) => {
+  try {
+    const { listingId, startDate, endDate, totalPrice } = req.body;
+
+    const [newBooking] = await db
+      .insert(bookings)
+      .values({
+        listingId: Number(listingId),
+        customerId: req.user.id,
+        startDate: new Date(startDate),
+        endDate: new Date(endDate),
+        totalPrice: totalPrice.toString(),
+        status: 'confirmed',
+      })
+      .returning();
+
+    res.status(201).json(newBooking);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 🚀 KULLANICININ REZERVASYONLARINI GETİR (Trips/Bookings)
+app.get('/api/bookings/my-bookings', authenticate, async (req: any, res) => {
+  try {
+    const data = await db.query.bookings.findMany({
+      where: eq(bookings.customerId, req.user.id),
+      with: {
+        listing: true, // Kiralanan ürün bilgisi
+      },
+      orderBy: (bookings, { desc }) => [desc(bookings.createdAt)],
+    });
+    res.json(data);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
 const PORT = 5000;
 app.listen(PORT, () => {
   console.log(`🚀 Backend Sunucusu Hazır: http://localhost:${PORT}`);
