@@ -1,10 +1,10 @@
+import { isNull, eq } from 'drizzle-orm';
 import express from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import dotenv from 'dotenv';
 import multer from 'multer';
 import { createClient } from '@supabase/supabase-js';
-import { isNull, eq } from 'drizzle-orm';
 import { db } from './db';
 import { categories, listings, banners } from './db/schema';
 import authRoutes from './routes/auth';
@@ -142,6 +142,103 @@ app.get('/api/listings/:id', async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
+
+// 🚀 İLAN DÜZENLEME MOTORU (PATCH) - KESİN KONUMLANDIRMA
+app.patch(
+  '/api/listings/:id',
+  authenticate,
+  upload.array('images', 5),
+  async (req: any, res: any) => {
+    const { id } = req.params;
+
+    // 🔍 TEŞHİS: Terminalde bu yazıyı görmeniz lazım
+    console.log(`📡 BACKEND: ID ${id} için PATCH isteği ulaştı.`);
+
+    try {
+      // 1. İlanı bul
+      const listing = await db.query.listings.findFirst({
+        where: eq(listings.id, Number(id)),
+      });
+
+      if (!listing)
+        return res.status(404).json({ error: 'İlan veritabanında yok.' });
+
+      // 2. Sahibi mi kontrol et
+      if (listing.sellerId !== req.user.id) {
+        return res.status(403).json({ error: 'Yetkisiz erişim.' });
+      }
+
+      const {
+        titleTr,
+        titleEn,
+        descriptionTr,
+        descriptionEn,
+        price,
+        currency,
+        categoryId,
+        specs,
+        isShippable,
+        latitude,
+        longitude,
+        addressText,
+        postCode,
+      } = req.body;
+
+      // 3. Resim mühürleme
+      let uploadedUrls = listing.imageUrls || [];
+      const files = req.files as Express.Multer.File[];
+      if (files && files.length > 0) {
+        for (const file of files) {
+          const fileName = `edit-${Date.now()}-${Math.round(Math.random() * 1e9)}`;
+          const { error: uploadError } = await supabaseAdmin.storage
+            .from('listings')
+            .upload(fileName, file.buffer, { contentType: file.mimetype });
+
+          if (!uploadError) {
+            const {
+              data: { publicUrl },
+            } = supabaseAdmin.storage.from('listings').getPublicUrl(fileName);
+            uploadedUrls.push(publicUrl);
+          }
+        }
+      }
+
+      // 4. Veritabanını Güncelle
+      const [updated] = await db
+        .update(listings)
+        .set({
+          title: titleTr || titleEn || listing.title,
+          titleTr: titleTr || listing.titleTr,
+          titleEn: titleEn || listing.titleEn,
+          description: descriptionTr || descriptionEn || listing.description,
+          descriptionTr: descriptionTr || listing.descriptionTr,
+          descriptionEn: descriptionEn || listing.descriptionEn,
+          price: price ? price.toString() : listing.price,
+          currency: currency || listing.currency,
+          categoryId: categoryId ? Number(categoryId) : listing.categoryId,
+          specs: specs
+            ? typeof specs === 'string'
+              ? JSON.parse(specs)
+              : specs
+            : listing.specs,
+          isShippable: isShippable || listing.isShippable,
+          latitude: latitude || listing.latitude,
+          longitude: longitude || listing.longitude,
+          addressText: addressText || listing.addressText,
+          postCode: postCode || listing.postCode,
+          imageUrls: uploadedUrls,
+        })
+        .where(eq(listings.id, Number(id)))
+        .returning();
+
+      console.log('✅ Başarıyla güncellendi.');
+      res.json(updated);
+    } catch (error: any) {
+      console.error('❌ PATCH HATASI:', error.message);
+      res.status(500).json({ error: error.message });
+    }
+  },
+);
 
 // 🚀 1. GEOCONDING PROXY (CORS & 403 BYPASS)
 app.get('/api/geocoding', async (req, res) => {
@@ -655,7 +752,107 @@ app.get('/api/bookings/my-bookings', authenticate, async (req: any, res) => {
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
+
+  // 🚀 İLAN GÜNCELLEME (Sadece Sahibi Yapabilir)
+  app.patch(
+    '/api/listings/:id',
+    authenticate,
+    upload.array('images', 5),
+    async (req: any, res: any) => {
+      const { id } = req.params;
+
+      // Terminalde bu yazıyı görmeliyiz
+      console.log(
+        `🛠 Düzenleme Talebi -> ID: ${id} | Kullanıcı: ${req.user.id}`,
+      );
+
+      try {
+        // 1. İlanı bul
+        const listing = await db.query.listings.findFirst({
+          where: eq(listings.id, Number(id)),
+        });
+
+        if (!listing)
+          return res.status(404).json({ error: 'İlan bulunamadı.' });
+
+        // 2. Güvenlik Kontrolü
+        if (listing.sellerId !== req.user.id) {
+          return res.status(403).json({ error: 'Bu işlem için yetkiniz yok.' });
+        }
+
+        const {
+          titleTr,
+          titleEn,
+          descriptionTr,
+          descriptionEn,
+          price,
+          currency,
+          categoryId,
+          specs,
+          isShippable,
+          latitude,
+          longitude,
+          addressText,
+          postCode,
+          city,
+          district,
+        } = req.body;
+
+        // 3. Resim Yönetimi
+        let uploadedUrls = listing.imageUrls || [];
+        const files = req.files as Express.Multer.File[];
+
+        if (files && files.length > 0) {
+          for (const file of files) {
+            const fileName = `edit-${Date.now()}-${file.originalname.replace(/\s+/g, '-')}`;
+            const { error: uploadError } = await supabaseAdmin.storage
+              .from('listings')
+              .upload(fileName, file.buffer, { contentType: file.mimetype });
+
+            if (!uploadError) {
+              const {
+                data: { publicUrl },
+              } = supabaseAdmin.storage.from('listings').getPublicUrl(fileName);
+              uploadedUrls.push(publicUrl);
+            }
+          }
+        }
+
+        // 5. Veritabanını Güncelle
+        const [updated] = await db
+          .update(listings)
+          .set({
+            title: titleTr || titleEn || listing.title,
+            titleTr: titleTr || listing.titleTr,
+            titleEn: titleEn || listing.titleEn,
+            description: descriptionTr || descriptionEn || listing.description,
+            descriptionTr: descriptionTr || listing.descriptionTr,
+            descriptionEn: descriptionEn || listing.descriptionEn,
+            price: price ? price.toString() : listing.price,
+            currency: currency || listing.currency,
+            categoryId: categoryId ? Number(categoryId) : listing.categoryId,
+            // Specs verisi metin olarak gelirse parse et, yoksa mevcut olanı tut
+            specs: specs ? JSON.parse(specs) : listing.specs,
+            isShippable: isShippable || listing.isShippable,
+            latitude: latitude || listing.latitude,
+            longitude: longitude || listing.longitude,
+            addressText: addressText || listing.addressText,
+            postCode: postCode || listing.postCode,
+            imageUrls: uploadedUrls,
+          })
+          .where(eq(listings.id, Number(id)))
+          .returning();
+
+        console.log('✅ Güncelleme Başarıyla Mühürlendi!');
+        res.json(updated);
+      } catch (error: any) {
+        console.error('❌ PATCH API ERROR:', error.message);
+        res.status(500).json({ error: error.message });
+      }
+    },
+  );
 });
+
 const PORT = 5000;
 app.listen(PORT, () => {
   console.log(`🚀 Backend Sunucusu Hazır: http://localhost:${PORT}`);
