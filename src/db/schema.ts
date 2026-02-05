@@ -154,6 +154,27 @@ export const orderStatusEnum = pgEnum('order_status', [
   'cancelled',
 ]);
 
+// 🚀 1. DEĞERLENDİRMELER (REVIEWS) TABLOSU
+export const reviews = pgTable('reviews', {
+  id: serial('id').primaryKey(),
+  orderId: integer('order_id')
+    .references(() => orders.id)
+    .unique()
+    .notNull(),
+  listingId: bigint('listing_id', { mode: 'number' })
+    .references(() => listings.id)
+    .notNull(),
+  buyerId: integer('buyer_id')
+    .references(() => users.id)
+    .notNull(),
+  sellerId: integer('seller_id')
+    .references(() => users.id)
+    .notNull(),
+  rating: integer('rating').notNull(), // 1 ile 5 arası
+  comment: text('comment'),
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
 // 🚀 2. SİPARİŞLER TABLOSU
 export const orders = pgTable('orders', {
   id: serial('id').primaryKey(),
@@ -168,11 +189,29 @@ export const orders = pgTable('orders', {
     .notNull(), // Satan
   quantity: integer('quantity').default(1).notNull(),
   totalPrice: numeric('total_price').notNull(),
-  status: orderStatusEnum('status').default('paid').notNull(), // Simülasyon olduğu için direkt 'paid' başlıyoruz.
-  addressId: integer('address_id').references(() => addresses.id),
+  //status: orderStatusEnum('status').default('paid').notNull(), // Simülasyon olduğu için direkt 'paid' başlıyoruz.
   shippingStatus: text('shipping_status').default('preparing'), // preparing, shipped, delivered
+  status: text('status').default('paid').notNull(), // paid, shipped, delivered, cancelled, returned
+
+  // 🚀 PERFORMANS İÇİN ZAMAN DAMGALARI
+  shippedAt: timestamp('shipped_at'), // Satıcının kargoladığı an
+  deliveredAt: timestamp('delivered_at'), // Teslim edildiği an
+  canceledAt: timestamp('canceled_at'), // İptal edildiği an
+  canceledBy: text('canceled_by'), // 'seller' veya 'buyer'
+
+  addressId: integer('address_id').references(() => addresses.id),
   createdAt: timestamp('created_at').defaultNow(),
 });
+
+// 🚀 3. İLİŞKİLERİ GÜNCELLE
+export const reviewsRelations = relations(reviews, ({ one }) => ({
+  order: one(orders, { fields: [reviews.orderId], references: [orders.id] }),
+  listing: one(listings, {
+    fields: [reviews.listingId],
+    references: [listings.id],
+  }),
+  seller: one(users, { fields: [reviews.sellerId], references: [users.id] }),
+}));
 
 // 🚀 3. İLİŞKİLER
 export const ordersRelations = relations(orders, ({ one }) => ({

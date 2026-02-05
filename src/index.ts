@@ -6,7 +6,7 @@ import dotenv from 'dotenv';
 import multer from 'multer';
 import { createClient } from '@supabase/supabase-js';
 import { db } from './db';
-import { categories, listings, banners } from './db/schema';
+import { categories, listings, banners, reviews } from './db/schema';
 import authRoutes from './routes/auth';
 import { inArray } from 'drizzle-orm';
 import { authenticate } from './middleware/auth';
@@ -481,7 +481,7 @@ app.get('/api/listings/:id/booked-dates', async (req, res) => {
 // 🚀 SATIN ALMA İŞLEMİ (Amazon Modu)
 app.post('/api/orders', authenticate, async (req: any, res) => {
   try {
-    const { listingId, quantity } = req.body;
+    const { listingId, addressId, quantity, totalPrice } = req.body;
     const buyerId = req.user.id;
 
     // 1. İlan bilgilerini al (Fiyat ve Satıcıyı bulmak için)
@@ -498,9 +498,11 @@ app.post('/api/orders', authenticate, async (req: any, res) => {
         listingId: Number(listingId),
         buyerId: buyerId,
         sellerId: listing.sellerId as number,
+        addressId: addressId ? Number(addressId) : null,
         quantity: quantity || 1,
         totalPrice: (Number(listing.price) * (quantity || 1)).toString(),
         status: 'paid', // Simülasyon gereği ödeme yapıldı kabul ediyoruz
+        shippingStatus: 'preparing',
       })
       .returning();
 
@@ -517,6 +519,7 @@ app.get('/api/orders/my-orders', authenticate, async (req: any, res) => {
       where: eq(orders.buyerId, req.user.id),
       with: {
         listing: true, // Ürün bilgisini de getir
+        address: true,
         seller: true, // Satıcı bilgisini de getir
       },
       orderBy: (orders, { desc }) => [desc(orders.createdAt)],
@@ -851,6 +854,75 @@ app.get('/api/bookings/my-bookings', authenticate, async (req: any, res) => {
       }
     },
   );
+});
+
+// 1. SİPARİŞ İPTALİ (Stok Geri Kazanma ve İade Simülasyonu)
+app.patch(
+  '/api/orders/:id/cancel',
+  authenticate,
+  async (req: any, res: any) => {
+    const { id } = req.params;
+    const { reason } = req.body; // 'buyer' veya 'seller'
+
+    try {
+      const order = await db.query.orders.findFirst({
+        where: eq(orders.id, Number(id)),
+        with: { listing: true },
+      });
+
+      if (!order) return res.status(404).json({ error: 'Sipariş bulunamadı.' });
+
+      // 🚀 STOK GERİ KAZANIMI: Ürün stoğunu iade et
+      await db
+        .update(listings)
+        .set({ stock: (order.listing?.stock || 0) + order.quantity })
+        .where(eq(listings.id, order.listingId));
+
+      // 🚀 2. ÇİFT DURUM GÜNCELLEME (Hem sipariş hem kargo durumu iptal olmalı)
+      const [updated] = await db
+        .update(orders)
+        .set({
+          status: 'cancelled',
+          shippingStatus: 'cancelled', // 🚀 SATIŞLARIM sayfası artık bunu görecek
+          canceledAt: new Date(),
+          canceledBy: reason,
+        })
+        .where(eq(orders.id, Number(id)))
+        .returning();
+
+      res.json(updated);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  },
+);
+
+// 2. YILDIZLI PUANLAMA (Review System)
+app.post('/api/reviews', authenticate, async (req: any, res: any) => {
+  try {
+    const { orderId, rating, comment } = req.body;
+    const order = await db.query.orders.findFirst({
+      where: eq(orders.id, orderId),
+    });
+
+    if (!order) return res.status(404).json({ error: 'Sipariş bulunamadı.' });
+
+    const [newReview] = await db
+      .insert(reviews)
+      .values({
+        orderId,
+        listingId: order.listingId,
+        buyerId: req.user.id,
+        sellerId: order.sellerId,
+        rating,
+        comment,
+      })
+      .returning();
+
+    res.status(201).json(newReview);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 const PORT = 5000;
