@@ -1,4 +1,4 @@
-import { isNull, eq } from 'drizzle-orm';
+import { isNull, eq, inArray, and, desc, gte, lte } from 'drizzle-orm';
 import express from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
@@ -6,17 +6,16 @@ import dotenv from 'dotenv';
 import multer from 'multer';
 import { createClient } from '@supabase/supabase-js';
 import { db } from './db';
-import { categories, listings, banners, reviews } from './db/schema';
+import { categories, listings, banners, reviews, users } from './db/schema';
 import authRoutes from './routes/auth';
-import { inArray } from 'drizzle-orm';
 import { authenticate } from './middleware/auth';
-import { and, gte, lte } from 'drizzle-orm';
 import { bookings } from './db/schema';
 import { orders } from './db/schema';
 import { addresses } from './db/schema';
 import { messages } from './db/schema';
 import axios from 'axios';
 import { InferSelectModel } from 'drizzle-orm';
+import adminRoutes from './routes/admin';
 
 dotenv.config();
 
@@ -989,6 +988,9 @@ app.get('/api/stats/performance', authenticate, async (req: any, res) => {
     res.status(500).json({ error: error.message });
   }
 });
+
+// backend/src/index.ts içindeki admin rotaları
+app.use('/api/admin', adminRoutes);
 
 const PORT = 5000;
 app.listen(PORT, () => {
