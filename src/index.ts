@@ -16,6 +16,7 @@ import { orders } from './db/schema';
 import { addresses } from './db/schema';
 import { messages } from './db/schema';
 import axios from 'axios';
+import { InferSelectModel } from 'drizzle-orm';
 
 dotenv.config();
 
@@ -920,6 +921,70 @@ app.post('/api/reviews', authenticate, async (req: any, res: any) => {
       .returning();
 
     res.status(201).json(newReview);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 🚀 1. YARDIMCI FONKSİYON: GPS SKORU HESAPLAMA (Google/Amazon Standardı)
+type Order = InferSelectModel<typeof orders> & { listing?: any };
+
+const calculateGPS = (ordersData: Order[]) => {
+  const total = ordersData.length || 1;
+
+  // Hata Adetleri
+  const defective = ordersData.filter((o) => o.status === 'returned').length;
+  const cancelledBySeller = ordersData.filter(
+    (o) => o.status === 'cancelled' && o.canceledBy === 'seller',
+  ).length;
+  const lateShipments = ordersData.filter((o) => {
+    if (!o.shippedAt || !o.createdAt) return false;
+    const diff =
+      new Date(o.shippedAt).getTime() - new Date(o.createdAt).getTime();
+    return diff > 3 * 24 * 60 * 60 * 1000;
+  }).length;
+
+  // Başarı Puanları (S = 100 - Hata Oranı)
+  const S_ODR = 100 - (defective / total) * 100;
+  const S_LSR = 100 - (lateShipments / total) * 100;
+  const S_CR = 100 - (cancelledBySeller / total) * 100;
+  const S_RR = 98; // Varsayılan başarı
+
+  // Ağırlıklı Ortalama
+  const gps = S_ODR * 0.4 + S_LSR * 0.2 + S_CR * 0.25 + S_RR * 0.15;
+
+  return {
+    gps: Number(gps.toFixed(2)),
+    metrics: {
+      odr: { count: defective, score: S_ODR },
+      lsr: { count: lateShipments, score: S_LSR },
+      cr: { count: cancelledBySeller, score: S_CR },
+    },
+  };
+};
+
+// 🚀 2. API ROTASI: SATICI PERFORMANSI
+app.get('/api/stats/performance', authenticate, async (req: any, res) => {
+  try {
+    const isSeller = req.query.sellerId;
+    const targetId = isSeller ? Number(isSeller) : req.user.id;
+
+    // Sadece bu satıcıya ait siparişleri çek (Son 30 gün)
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+    const data = await db.query.orders.findMany({
+      where: and(
+        eq(orders.sellerId, targetId),
+        gte(orders.createdAt, thirtyDaysAgo),
+      ),
+    });
+
+    const performance = calculateGPS(data);
+    res.json({
+      totalOrders: data.length,
+      ...performance,
+    });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
