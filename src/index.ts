@@ -1184,6 +1184,36 @@ app.get('/api/favorites', authenticate, async (req: any, res) => {
   }
 });
 
+app.get('/api/my-listings', authenticate, async (req: any, res) => {
+  try {
+    const data = await db.query.listings.findMany({
+      where: eq(listings.sellerId, req.user.id),
+      with: {
+        category: true, // Hangi kategoride olduğunu görmek için
+      },
+      orderBy: (listings, { desc }) => [desc(listings.createdAt)],
+    });
+    res.json(data);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// İlan Silme Rotası (Opsiyonel ama gerekli)
+app.delete('/api/listings/:id', authenticate, async (req: any, res) => {
+  try {
+    await db.delete(listings).where(
+      and(
+        eq(listings.id, Number(req.params.id)),
+        eq(listings.sellerId, req.user.id), // Güvenlik: Sadece sahibi silebilir
+      ),
+    );
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 const PORT = 5000;
 app.listen(PORT, () => {
   console.log(`🚀 Backend Sunucusu Hazır: http://localhost:${PORT}`);
