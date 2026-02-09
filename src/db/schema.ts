@@ -277,3 +277,45 @@ export const messagesRelations = relations(messages, ({ one }) => ({
     references: [listings.id],
   }),
 }));
+
+// 🚀 1. SEPET (CART) TABLOSU
+export const cart = pgTable('cart', {
+  id: serial('id').primaryKey(),
+  userId: integer('user_id')
+    .references(() => users.id)
+    .notNull(),
+  listingId: bigint('listing_id', { mode: 'number' })
+    .references(() => listings.id)
+    .notNull(),
+  quantity: integer('quantity').default(1).notNull(),
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
+// 🚀 2. FAVORİLER (FAVORITES) TABLOSU
+export const favorites = pgTable('favorites', {
+  id: serial('id').primaryKey(),
+  userId: integer('user_id')
+    .references(() => users.id)
+    .notNull(),
+  listingId: bigint('listing_id', { mode: 'number' })
+    .references(() => listings.id)
+    .notNull(),
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
+// 🚀 3. YENİ İLİŞKİLER (RELATIONS)
+export const cartRelations = relations(cart, ({ one }) => ({
+  user: one(users, { fields: [cart.userId], references: [users.id] }),
+  listing: one(listings, {
+    fields: [cart.listingId],
+    references: [listings.id],
+  }),
+}));
+
+export const favoritesRelations = relations(favorites, ({ one }) => ({
+  user: one(users, { fields: [favorites.userId], references: [users.id] }),
+  listing: one(listings, {
+    fields: [favorites.listingId],
+    references: [listings.id],
+  }),
+}));

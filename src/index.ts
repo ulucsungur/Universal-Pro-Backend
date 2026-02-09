@@ -16,6 +16,7 @@ import { messages } from './db/schema';
 import axios from 'axios';
 import { InferSelectModel } from 'drizzle-orm';
 import adminRoutes from './routes/admin';
+import { cart, favorites } from './db/schema';
 
 dotenv.config();
 
@@ -479,19 +480,56 @@ app.get('/api/listings/:id/booked-dates', async (req, res) => {
 });
 
 // 🚀 SATIN ALMA İŞLEMİ (Amazon Modu)
+// app.post('/api/orders', authenticate, async (req: any, res) => {
+//   try {
+//     const { listingId, addressId, quantity, totalPrice } = req.body;
+//     const buyerId = req.user.id;
+
+//     // 1. İlan bilgilerini al (Fiyat ve Satıcıyı bulmak için)
+//     const listing = await db.query.listings.findFirst({
+//       where: eq(listings.id, Number(listingId)),
+//     });
+
+//     if (!listing) return res.status(404).json({ error: 'İlan bulunamadı' });
+
+//     // 2. Siparişi oluştur
+//     const [newOrder] = await db
+//       .insert(orders)
+//       .values({
+//         listingId: Number(listingId),
+//         buyerId: buyerId,
+//         sellerId: listing.sellerId as number,
+//         addressId: addressId ? Number(addressId) : null,
+//         quantity: quantity || 1,
+//         totalPrice: (Number(listing.price) * (quantity || 1)).toString(),
+//         status: 'paid', // Simülasyon gereği ödeme yapıldı kabul ediyoruz
+//         shippingStatus: 'preparing',
+//       })
+//       .returning();
+
+//     res.status(201).json(newOrder);
+//   } catch (error: any) {
+//     res.status(500).json({ error: error.message });
+//   }
+// });
 app.post('/api/orders', authenticate, async (req: any, res) => {
   try {
     const { listingId, addressId, quantity, totalPrice } = req.body;
     const buyerId = req.user.id;
 
-    // 1. İlan bilgilerini al (Fiyat ve Satıcıyı bulmak için)
     const listing = await db.query.listings.findFirst({
       where: eq(listings.id, Number(listingId)),
     });
 
     if (!listing) return res.status(404).json({ error: 'İlan bulunamadı' });
 
-    // 2. Siparişi oluştur
+    // 🚀 STOK KONTROLÜ (Null güvenliği eklendi)
+    const currentStock = Number(listing.stock || 0);
+    if (currentStock < quantity) {
+      return res.status(400).json({ error: 'Yetersiz stok!' });
+    }
+
+    // 1. Siparişi oluştur
     const [newOrder] = await db
       .insert(orders)
       .values({
@@ -499,12 +537,23 @@ app.post('/api/orders', authenticate, async (req: any, res) => {
         buyerId: buyerId,
         sellerId: listing.sellerId as number,
         addressId: addressId ? Number(addressId) : null,
-        quantity: quantity || 1,
-        totalPrice: (Number(listing.price) * (quantity || 1)).toString(),
-        status: 'paid', // Simülasyon gereği ödeme yapıldı kabul ediyoruz
+        quantity: quantity,
+        totalPrice: totalPrice.toString(),
+        status: 'paid',
         shippingStatus: 'preparing',
       })
       .returning();
+
+    // 🚀 2. STOK GÜNCELLEME (Hata veren kısım burasıydı, düzeldi ✅)
+    await db
+      .update(listings)
+      .set({ stock: currentStock - quantity })
+      .where(eq(listings.id, listing.id));
+
+    // 🚀 3. SEPETİ TEMİZLE
+    await db
+      .delete(cart)
+      .where(and(eq(cart.userId, buyerId), eq(cart.listingId, listing.id)));
 
     res.status(201).json(newOrder);
   } catch (error: any) {
@@ -587,31 +636,36 @@ app.get('/api/orders/my-sales', authenticate, async (req: any, res) => {
 });
 
 // 2. SİPARİŞ DURUMUNU GÜNCELLE (Kargola / Teslim Et)
-app.patch('/api/orders/:id/status', authenticate, async (req: any, res) => {
-  const { id } = req.params;
-  const { status } = req.body; // 'shipped' veya 'delivered' gelecek
+app.patch(
+  '/api/orders/:id/status',
+  authenticate,
+  async (req: any, res: any) => {
+    const { id } = req.params;
+    const { status } = req.body; // 'shipped' veya 'delivered' gelecek
 
-  try {
-    const [updatedOrder] = await db
-      .update(orders)
-      .set({ shippingStatus: status })
-      .where(
-        and(
-          eq(orders.id, Number(id)),
-          eq(orders.sellerId, req.user.id), // 🚀 Sadece satıcı güncelleyebilir
-        ),
-      )
-      .returning();
+    try {
+      const [updatedOrder] = await db
+        .update(orders)
+        .set({
+          shippingStatus: status, // Satıcı ekranı için
+          status: status, // 🚀 ALICI EKRANI İÇİN (Eşitlendi!)
+        })
+        .where(
+          and(
+            eq(orders.id, Number(id)),
+            eq(orders.sellerId, req.user.id), // Sadece ilgili satıcı yapabilir
+          ),
+        )
+        .returning();
 
-    if (!updatedOrder)
-      return res
-        .status(404)
-        .json({ error: 'Sipariş bulunamadı veya yetkiniz yok.' });
-    res.json(updatedOrder);
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
-  }
-});
+      if (!updatedOrder)
+        return res.status(404).json({ error: 'Sipariş bulunamadı.' });
+      res.json(updatedOrder);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  },
+);
 
 // 1. MESAJ GÖNDER
 app.post('/api/messages', authenticate, async (req: any, res: any) => {
@@ -865,31 +919,19 @@ app.patch(
     const { reason } = req.body; // 'buyer' veya 'seller'
 
     try {
-      const order = await db.query.orders.findFirst({
-        where: eq(orders.id, Number(id)),
-        with: { listing: true },
-      });
-
-      if (!order) return res.status(404).json({ error: 'Sipariş bulunamadı.' });
-
-      // 🚀 STOK GERİ KAZANIMI: Ürün stoğunu iade et
-      await db
-        .update(listings)
-        .set({ stock: (order.listing?.stock || 0) + order.quantity })
-        .where(eq(listings.id, order.listingId));
-
-      // 🚀 2. ÇİFT DURUM GÜNCELLEME (Hem sipariş hem kargo durumu iptal olmalı)
       const [updated] = await db
         .update(orders)
         .set({
-          status: 'cancelled',
-          shippingStatus: 'cancelled', // 🚀 SATIŞLARIM sayfası artık bunu görecek
+          status: 'cancelled', // Alıcı ekranı mühürlendi
+          shippingStatus: 'cancelled', // Satıcı ekranı mühürlendi
           canceledAt: new Date(),
-          canceledBy: reason,
+          canceledBy: reason, // Kimin iptal ettiği mühürlendi
         })
-        .where(eq(orders.id, Number(id)))
+        .where(eq(orders.id, Number(id))) // 🚀 KRİTİK: Sadece İLGİLİ ID güncellenir!
         .returning();
 
+      if (!updated)
+        return res.status(404).json({ error: 'Sipariş bulunamadı.' });
       res.json(updated);
     } catch (error: any) {
       res.status(500).json({ error: error.message });
@@ -991,6 +1033,156 @@ app.get('/api/stats/performance', authenticate, async (req: any, res) => {
 
 // backend/src/index.ts içindeki admin rotaları
 app.use('/api/admin', adminRoutes);
+
+// 1. SEPETE EKLE VEYA GÜNCELLE
+app.post('/api/cart', authenticate, async (req: any, res: any) => {
+  const { listingId, quantity } = req.body;
+  try {
+    // Ürün sepette zaten var mı?
+    const existing = await db.query.cart.findFirst({
+      where: and(
+        eq(cart.userId, req.user.id),
+        eq(cart.listingId, Number(listingId)),
+      ),
+    });
+
+    if (existing) {
+      await db
+        .update(cart)
+        .set({ quantity: existing.quantity + (quantity || 1) })
+        .where(eq(cart.id, existing.id));
+      return res.json({ message: 'Sepet güncellendi' });
+    }
+
+    await db.insert(cart).values({
+      userId: req.user.id,
+      listingId: Number(listingId),
+      quantity: quantity || 1,
+    });
+    res.status(201).json({ message: 'Sepete eklendi' });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 2. SEPETİMİ GETİR
+app.get('/api/cart', authenticate, async (req: any, res: any) => {
+  try {
+    const data = await db.query.cart.findMany({
+      where: eq(cart.userId, req.user.id),
+      with: { listing: true },
+    });
+    res.json(data);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 3. SEPETTEN SİL
+app.delete('/api/cart/:id', authenticate, async (req: any, res: any) => {
+  try {
+    await db
+      .delete(cart)
+      .where(
+        and(eq(cart.id, Number(req.params.id)), eq(cart.userId, req.user.id)),
+      );
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- FAVORİ (FAVORITES) API ---
+
+// 4. FAVORİ EKLE/SİL (TOGGLE)
+app.post('/api/favorites/toggle', authenticate, async (req: any, res: any) => {
+  const { listingId } = req.body;
+  try {
+    const existing = await db.query.favorites.findFirst({
+      where: and(
+        eq(favorites.userId, req.user.id),
+        eq(favorites.listingId, Number(listingId)),
+      ),
+    });
+
+    if (existing) {
+      await db.delete(favorites).where(eq(favorites.id, existing.id));
+      return res.json({ status: 'removed' });
+    }
+
+    await db
+      .insert(favorites)
+      .values({ userId: req.user.id, listingId: Number(listingId) });
+    res.json({ status: 'added' });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 5. FAVORİ ID LİSTESİNİ GETİR (Butonların rengi için)
+app.get('/api/favorites/ids', authenticate, async (req: any, res: any) => {
+  const data = await db
+    .select({ id: favorites.listingId })
+    .from(favorites)
+    .where(eq(favorites.userId, req.user.id));
+  res.json(data.map((f) => Number(f.id)));
+});
+app.post('/api/orders/checkout-cart', authenticate, async (req: any, res) => {
+  try {
+    const { addressId } = req.body;
+    const userId = req.user.id;
+
+    const userCart = await db.query.cart.findMany({
+      where: eq(cart.userId, userId),
+      with: { listing: true },
+    });
+
+    for (const item of userCart) {
+      if (!item.listing) continue;
+      await db.insert(orders).values({
+        listingId: item.listingId,
+        buyerId: userId,
+        sellerId: item.listing.sellerId as number,
+        addressId: addressId,
+        quantity: item.quantity,
+        totalPrice: (Number(item.listing.price) * item.quantity).toString(),
+        status: 'paid',
+        shippingStatus: 'preparing',
+      });
+      await db
+        .update(listings)
+        .set({ stock: (item.listing.stock || 0) - item.quantity })
+        .where(eq(listings.id, item.listingId));
+    }
+    await db.delete(cart).where(eq(cart.userId, userId));
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/favorites', authenticate, async (req: any, res) => {
+  try {
+    // 1. Kullanıcının favori kayıtlarını 'listings' ile birlikte getir
+    const data = await db.query.favorites.findMany({
+      where: eq(favorites.userId, req.user.id),
+      with: {
+        listing: {
+          with: { seller: true }, // İstersen satıcı bilgisini de çekersin
+        },
+      },
+    });
+
+    // 2. Sadece içindeki ilan (listing) nesnelerini bir dizi olarak döndür
+    const favoritedListings = data
+      .map((f) => f.listing)
+      .filter((l) => l !== null); // Eğer ilan silindiyse null gelir, onları temizle
+
+    res.json(favoritedListings);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
 
 const PORT = 5000;
 app.listen(PORT, () => {
