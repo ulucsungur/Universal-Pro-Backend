@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { db } from '../db';
 import { users, listings, orders } from '../db/schema';
-import { eq, desc, and } from 'drizzle-orm';
+import { ne, eq, desc, and } from 'drizzle-orm';
 import { authenticate } from '../middleware/auth';
 import { calculateGPS } from '../lib/analytics';
 
@@ -134,4 +134,165 @@ router.patch('/users/:id/role', authenticate, async (req: any, res: any) => {
   }
 });
 
+// 🚀 6. KİRALAMA ANALİZİ (Günlük vs Uzun Dönem)
+router.get('/rental-analysis', authenticate, async (req: any, res: any) => {
+  if (req.user.role !== 'admin')
+    return res.status(403).json({ error: 'Yetkisiz' });
+  try {
+    const rentalListings = await db.query.listings.findMany({
+      where: eq(listings.type, 'rent'),
+    });
+
+    const daily = rentalListings.filter((l) => l.isDaily === 'true').length;
+    const longTerm = rentalListings.filter((l) => l.isDaily === 'false').length;
+
+    res.json([
+      { name: 'Günlük Kiralama', value: daily, color: '#a855f7' },
+      { name: 'Uzun Dönem', value: longTerm, color: '#3b82f6' },
+    ]);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 🚀 ACENTE MESAİSİ (Aylık İlan Yükleme Trendi)
+router.get('/workload', authenticate, async (req: any, res: any) => {
+  if (req.user.role !== 'admin')
+    return res.status(403).json({ error: 'Yetkisiz' });
+  try {
+    const allListings = await db.query.listings.findMany({
+      with: { seller: true },
+    });
+
+    const monthsOrder = [
+      'Oca',
+      'Şub',
+      'Mar',
+      'Nis',
+      'May',
+      'Haz',
+      'Tem',
+      'Ağu',
+      'Eyl',
+      'Eki',
+      'Kas',
+      'Ara',
+    ];
+    const groupedData: Record<string, any> = {};
+
+    allListings.forEach((l) => {
+      if (!l.createdAt || !l.seller) return;
+      const date = new Date(l.createdAt);
+      const monthLabel = monthsOrder[date.getMonth()];
+      const agentName = l.seller.fullName;
+
+      if (!groupedData[monthLabel]) {
+        groupedData[monthLabel] = {
+          month: monthLabel,
+          _sortIdx: date.getMonth(),
+        };
+      }
+      groupedData[monthLabel][agentName] =
+        (groupedData[monthLabel][agentName] || 0) + 1;
+    });
+
+    const result = Object.values(groupedData).sort(
+      (a: any, b: any) => a._sortIdx - b._sortIdx,
+    );
+    result.forEach((item: any) => delete item._sortIdx);
+
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// test acenta mesaisi
+router.get('/workload', authenticate, async (req: any, res: any) => {
+  // 🚀 ASİT TESTİ: Eğer grafik hala değişmezse, backend bu kodu görmüyor demektir!
+  const testVerisi = [
+    { month: 'Oca', 'Uluç Sungur': 4, 'Tuna Sungur': 0 },
+    { month: 'Şub', 'Uluç Sungur': 2, 'Tuna Sungur': 2 },
+  ];
+  console.log('!!! TEST VERİSİ GÖNDERİLİYOR !!!');
+  res.json(testVerisi);
+});
+
+// 🚀 KİRALAMA ANALİZİ (Günlük vs Uzun Dönem)
+router.get('/rental-analysis', authenticate, async (req: any, res: any) => {
+  if (req.user.role !== 'admin')
+    return res.status(403).json({ error: 'Yetkisiz' });
+  try {
+    const rentals = await db.query.listings.findMany({
+      where: eq(listings.type, 'rent'),
+    });
+
+    const stats = [
+      {
+        name: 'GÜNLÜK',
+        value: rentals.filter((r) => r.isDaily === 'true').length,
+        fill: '#a855f7',
+      },
+      {
+        name: 'UZUN DÖNEM',
+        value: rentals.filter((r) => r.isDaily === 'false').length,
+        fill: '#3b82f6',
+      },
+    ];
+
+    res.json(stats);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get(
+  '/agent-revenue-analysis',
+  authenticate,
+  async (req: any, res: any) => {
+    if (req.user.role !== 'admin')
+      return res.status(403).json({ error: 'Yetkisiz' });
+
+    const { year, month } = req.query;
+
+    try {
+      const allOrders = await db.query.orders.findMany({
+        // 🚀 KRİTİK DEĞİŞİKLİK: Sadece 'paid' değil, 'cancelled' OLMAYAN her şeyi çekiyoruz.
+        // Yani: paid, shipped, delivered durumundaki tüm cirolar grafiğe girer.
+        where: and(
+          and(ne(orders.status, 'cancelled'), ne(orders.status, 'returned')),
+        ),
+        with: { seller: true },
+      });
+
+      const revenueMap: Record<string, number> = {};
+
+      allOrders.forEach((o) => {
+        if (!o.createdAt) return;
+        const d = new Date(o.createdAt);
+
+        const matchYear = year ? d.getFullYear() === Number(year) : true;
+        const matchMonth = month ? d.getMonth() === Number(month) : true;
+
+        if (matchYear && matchMonth) {
+          const agentName = o.seller?.fullName || 'Bilinmeyen';
+          // Fiyatı sayıya çevirip ekliyoruz
+          revenueMap[agentName] =
+            (revenueMap[agentName] || 0) + Number(o.totalPrice || 0);
+        }
+      });
+
+      // Ciroya göre büyükten küçüğe sırala
+      const result = Object.entries(revenueMap)
+        .map(([name, revenue]) => ({ name, revenue }))
+        .sort((a, b) => b.revenue - a.revenue);
+
+      // console.log(`📊 FİLTRE: Yıl ${year}, Ay ${month} için sonuçlar:`, result);
+
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  },
+);
 export default router;
