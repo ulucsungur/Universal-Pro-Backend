@@ -1,4 +1,4 @@
-import { isNull, eq, inArray, and, desc, gte, lte } from 'drizzle-orm';
+import { isNull, eq, inArray, and, desc, gte, lte, sql } from 'drizzle-orm';
 import express from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
@@ -6,7 +6,14 @@ import dotenv from 'dotenv';
 import multer from 'multer';
 import { createClient } from '@supabase/supabase-js';
 import { db } from './db';
-import { categories, listings, banners, reviews, users } from './db/schema';
+import {
+  categories,
+  listings,
+  banners,
+  reviews,
+  users,
+  blogs,
+} from './db/schema';
 import authRoutes from './routes/auth';
 import { authenticate } from './middleware/auth';
 import { bookings } from './db/schema';
@@ -1211,6 +1218,211 @@ app.delete('/api/listings/:id', authenticate, async (req: any, res) => {
     res.json({ success: true });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
+  }
+});
+
+// 🚀 1. TÜM BLOGLARI LİSTELE (Kategorili ve Yazarlı)
+app.get('/api/blogs', async (req, res) => {
+  try {
+    const data = await db.query.blogs.findMany({
+      with: {
+        author: { columns: { fullName: true, avatarUrl: true } },
+        category: true,
+      },
+      orderBy: (blogs, { desc }) => [desc(blogs.createdAt)],
+    });
+    res.json(data);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 🚀 2. YENİ BLOG EKLE (Sadece Admin ve Agent)
+app.post(
+  '/api/blogs',
+  authenticate,
+  upload.single('image'),
+  async (req: any, res) => {
+    if (req.user.role === 'user')
+      return res.status(403).json({ error: 'Bu işlem için yetkiniz yok.' });
+
+    try {
+      const { title, content, categoryId, isPrivate } = req.body;
+      let imageUrl = '';
+
+      if (req.file) {
+        const fileName = `blog-${Date.now()}-${req.file.originalname.replace(/\s+/g, '-')}`;
+        await supabaseAdmin.storage
+          .from('listings')
+          .upload(fileName, req.file.buffer, {
+            contentType: req.file.mimetype,
+          });
+
+        const {
+          data: { publicUrl },
+        } = supabaseAdmin.storage.from('listings').getPublicUrl(fileName);
+        imageUrl = publicUrl;
+      }
+
+      const [newBlog] = await db
+        .insert(blogs)
+        .values({
+          title,
+          content,
+          categoryId: Number(categoryId),
+          authorId: req.user.id,
+          isPrivate: isPrivate || 'false',
+          imageUrl,
+        })
+        .returning();
+
+      res.status(201).json(newBlog);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  },
+);
+
+// 🚀 BLOG GÜNCELLEME (PATCH)
+app.patch(
+  '/api/blogs/:id',
+  authenticate,
+  upload.single('image'),
+  async (req: any, res: any) => {
+    try {
+      const { id } = req.params;
+      const { title, content, categoryId, isPrivate } = req.body;
+
+      const blog = await db.query.blogs.findFirst({
+        where: eq(blogs.id, Number(id)),
+      });
+
+      if (!blog) return res.status(404).json({ error: 'Blog bulunamadı' });
+      if (blog.authorId !== req.user.id && req.user.role !== 'admin') {
+        return res.status(403).json({ error: 'Yetkisiz işlem' });
+      }
+
+      let uploadedUrl = blog.imageUrl;
+      if (req.file) {
+        const fileName = `blog-edit-${Date.now()}-${req.file.originalname.replace(/\s+/g, '-')}`;
+        await supabaseAdmin.storage
+          .from('listings')
+          .upload(fileName, req.file.buffer, {
+            contentType: req.file.mimetype,
+          });
+        const {
+          data: { publicUrl },
+        } = supabaseAdmin.storage.from('listings').getPublicUrl(fileName);
+        uploadedUrl = publicUrl;
+      }
+
+      const [updatedBlog] = await db
+        .update(blogs)
+        .set({
+          title: title || blog.title,
+          content: content || blog.content,
+          categoryId: categoryId ? Number(categoryId) : blog.categoryId,
+          isPrivate: isPrivate || blog.isPrivate,
+          imageUrl: uploadedUrl,
+          updatedAt: new Date(),
+        })
+        .where(eq(blogs.id, Number(id)))
+        .returning();
+
+      res.json(updatedBlog);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  },
+);
+
+// 🚀 3. BLOG SİL (Sadece sahibi veya Admin)
+app.delete('/api/blogs/:id', authenticate, async (req: any, res) => {
+  try {
+    const blog = await db.query.blogs.findFirst({
+      where: eq(blogs.id, Number(req.params.id)),
+    });
+    if (!blog) return res.status(404).json({ error: 'Blog bulunamadı' });
+
+    // Yetki kontrolü: Sadece yazarı veya Admin silebilir
+    if (blog.authorId !== req.user.id && req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Yetkisiz silme işlemi' });
+    }
+
+    await db.delete(blogs).where(eq(blogs.id, Number(req.params.id)));
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/blogs/:id', async (req, res) => {
+  try {
+    const blog = await db.query.blogs.findFirst({
+      where: eq(blogs.id, Number(req.params.id)),
+      with: { author: true, category: true },
+    });
+    if (!blog) return res.status(404).json({ error: 'Blog bulunamadı' });
+    res.json(blog);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+// 🚀 2. SADECE SAYACI ARTIRAN YENİ ROTA (POST)
+app.post('/api/blogs/:id/view', async (req: any, res: any) => {
+  try {
+    const { id } = req.params;
+
+    // Doğrudan artır (Yazar kontrolü frontend'de yapılacak)
+    await db
+      .update(blogs)
+      .set({ viewCount: sql`${blogs.viewCount} + 1` })
+      .where(eq(blogs.id, Number(id)));
+
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 🚀 1. SADECE KENDİ BLOGLARINI GETİR
+app.get('/api/my-blogs', authenticate, async (req: any, res) => {
+  try {
+    console.log(`📡 Bloglar çekiliyor. Kullanıcı ID: ${req.user.id}`);
+    const data = await db.query.blogs.findMany({
+      where: eq(blogs.authorId, req.user.id),
+      with: { category: true },
+      orderBy: (blogs, { desc }) => [desc(blogs.createdAt)],
+    });
+    res.json(data);
+  } catch (err: any) {
+    console.error('❌ BACKEND HATASI:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 🚀 2. BLOG DETAYI (Okunma sayısını artıracak şekilde güncellendi)
+app.get('/api/blogs/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Önce blogu bul
+    const blog = await db.query.blogs.findFirst({
+      where: eq(blogs.id, Number(id)),
+      with: { author: true, category: true },
+    });
+
+    if (!blog) return res.status(404).json({ error: 'Blog bulunamadı' });
+
+    // 📈 OKUNMA SAYISINI 1 ARTIR
+    await db
+      .update(blogs)
+      .set({ viewCount: (blog.viewCount || 0) + 1 })
+      .where(eq(blogs.id, Number(id)));
+
+    res.json(blog);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
   }
 });
 

@@ -319,3 +319,34 @@ export const favoritesRelations = relations(favorites, ({ one }) => ({
     references: [listings.id],
   }),
 }));
+
+// backend/src/db/schema.ts içine ekle:
+
+export const blogs = pgTable('blogs', {
+  id: serial('id').primaryKey(),
+  title: text('title').notNull(),
+  content: text('content').notNull(), // HTML (RichText) içeriği burada tutulacak
+  imageUrl: text('image_url'),
+  viewCount: integer('view_count').default(0),
+  categoryId: bigint('category_id', { mode: 'number' }).references(
+    () => categories.id,
+  ),
+  authorId: integer('author_id')
+    .references(() => users.id)
+    .notNull(),
+  isPrivate: text('is_private').default('false').notNull(), // 'true' ise sadece admin/agent görebilir
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+});
+
+// İLİŞKİLER
+export const blogsRelations = relations(blogs, ({ one }) => ({
+  author: one(users, {
+    fields: [blogs.authorId],
+    references: [users.id],
+  }),
+  category: one(categories, {
+    fields: [blogs.categoryId],
+    references: [categories.id],
+  }),
+}));
